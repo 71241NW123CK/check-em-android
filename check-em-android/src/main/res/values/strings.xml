@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="micr_scan__empty_routing">ROUTING: ???</string>
+    <string name="micr_scan__empty_account">ACCOUNT: ???</string>
+    <string name="micr_scan__routing_format">ROUTING: %s</string>
+    <string name="micr_scan__account_format">ACCOUNT: %s</string>
+    <string name="micr_scan__ok">OK</string>
+    <string name="micr_scan__instructions">Place the row of symbols at the bottom of your check in the scanning area.</string>
+</resources>
