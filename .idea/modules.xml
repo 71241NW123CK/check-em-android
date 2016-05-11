@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/check-em-android.iml" filepath="$PROJECT_DIR$/check-em-android.iml" />
+      <module fileurl="file://$PROJECT_DIR$/check-em-android/check-em-android-check-em-android.iml" filepath="$PROJECT_DIR$/check-em-android/check-em-android-check-em-android.iml" />
+      <module fileurl="file://$PROJECT_DIR$/check-em-android-example/check-em-android-example.iml" filepath="$PROJECT_DIR$/check-em-android-example/check-em-android-example.iml" />
+    </modules>
+  </component>
+</project>
