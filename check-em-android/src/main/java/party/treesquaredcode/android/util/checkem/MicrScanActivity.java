@@ -8,7 +8,6 @@ import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.TextureView;
@@ -16,17 +15,18 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.io.IOException;
+import java.util.Date;
 import java.util.List;
 
 /**
  * Created by rht on 5/10/16.
  */
 public class MicrScanActivity extends Activity implements TextureView.SurfaceTextureListener {
+    private static final long AUTOFOCUS_COOL_DOWN = 2000L;
+
     private CheckEm.LayoutStrategy layoutStrategy;
 
     private FrameLayout previewFrameLayout;
@@ -42,6 +42,11 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
     MicrOcrUtil.MicrOcrResult result;
 
     ScanAsyncTask scanAsyncTask;
+    boolean surfaceTextureDestroyed;
+
+    boolean doingAutoFocus;
+
+    Long lastAutofocusTime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -117,13 +122,6 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
         FrameLayout.LayoutParams bottomBorderLayoutParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, verticalBorderHeight, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         previewFrameLayout.addView(bottomBorder, bottomBorderLayoutParams);
 
-//        View view = new View(this);
-//        view.setBackgroundColor(0x80FF0000);
-//        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams((int) (screenWidth * scanWidthRatio), (int) (screenHeight * scanHeightRatio), Gravity.CENTER);
-//        previewFrameLayout.addView(view, layoutParams);
-
-
-
         clear();
         micrOcrUtil = new MicrOcrUtil();
     }
@@ -146,6 +144,11 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
             scanAsyncTask.shouldKill = true;
         }
         super.onStop();
+        if (!surfaceTextureDestroyed) {
+            camera.stopPreview();
+            camera.release();
+        }
+        surfaceTextureDestroyed = true;
     }
 
     @Override
@@ -154,13 +157,17 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
         Camera.Parameters parameters = camera.getParameters();
         Camera.Size previewSize = getOptimalPreviewSize(parameters.getSupportedPreviewSizes(), width, height);
         parameters.setPreviewSize(previewSize.width, previewSize.height);
-        if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)) {
+        if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH) && parameters.getSupportedFlashModes().contains(Camera.Parameters.FLASH_MODE_TORCH)) {
             parameters.setFlashMode(Camera.Parameters.FLASH_MODE_TORCH);
         }
-        parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+        String focusMode = getFocusMode(parameters.getSupportedFocusModes());
+        if (focusMode != null) {
+            parameters.setFocusMode(focusMode);
+        }
         camera.setParameters(parameters);
         try {
             camera.setPreviewTexture(surface);
+            surfaceTextureDestroyed = false;
             camera.startPreview();
         } catch (IOException ioe) {
         }
@@ -173,46 +180,79 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
 
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-        camera.stopPreview();
-        camera.release();
-        return true;
+        if (!surfaceTextureDestroyed) {
+            camera.stopPreview();
+            camera.release();
+        }
+        return surfaceTextureDestroyed = true;
     }
 
     @Override
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
         if (micrOcrUtil != null && !micrOcrUtil.isRunning()) {
             Bitmap bitmap = textureView.getBitmap();
-            if (bitmap == null) {
-                return;
+            String focusMode = camera.getParameters().getFocusMode();
+            if (focusMode.equals(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+                startScan(bitmap);
+            } else {
+                if (!doingAutoFocus) {
+                    startScan(bitmap);
+                    long currentTime = new Date().getTime();
+                    if (lastAutofocusTime == null || lastAutofocusTime + AUTOFOCUS_COOL_DOWN < currentTime) {
+                        lastAutofocusTime = currentTime;
+                        doAutoFocus();
+                    }
+                }
             }
-            int bitmapWidth = bitmap.getWidth();
-            int bitmapHeight = bitmap.getHeight();
-            int halfBitmapWidth = bitmapWidth / 2;
-            int halfScanWidth = (int) (halfBitmapWidth * scanWidthRatio);
-            int halfBitmapHeight = bitmapHeight / 2;
-            int halfScanHeight = (int) (halfBitmapHeight * scanHeightRatio);
-            int startX = halfBitmapWidth - halfScanWidth;
-            int endX = halfBitmapWidth + halfScanWidth;
-            int startY = halfBitmapHeight - halfScanHeight;
-            int endY = halfBitmapHeight + halfScanHeight;
-            if (startX < 0) {
-                startX = 0;
-            }
-            if (endX > bitmapWidth) {
-                endX = bitmapWidth;
-            }
-            if (startY < 0) {
-                startY = 0;
-            }
-            if (endY > bitmapHeight) {
-                endY = bitmapHeight;
-            }
-            int scanWidth = endX - startX;
-            int scanHeight = endY - startY;
-            bitmap = Bitmap.createBitmap(bitmap, startX, startY, scanWidth, scanHeight);
-            scanAsyncTask = new ScanAsyncTask();
-            scanAsyncTask.execute(bitmap);
         }
+    }
+
+    void doAutoFocus() {
+        doingAutoFocus = true;
+        camera.autoFocus(new Camera.AutoFocusCallback() {
+            @Override
+            public void onAutoFocus(boolean success, Camera camera) {
+                if (!success) {
+                    doAutoFocus();
+                } else {
+                    doingAutoFocus = false;
+                }
+            }
+        });
+    }
+
+    void startScan(Bitmap bitmap) {
+        if (bitmap == null) {
+            return;
+        }
+        int bitmapWidth = bitmap.getWidth();
+        int bitmapHeight = bitmap.getHeight();
+        int halfBitmapWidth = bitmapWidth / 2;
+        int halfScanWidth = (int) (halfBitmapWidth * scanWidthRatio);
+        int halfBitmapHeight = bitmapHeight / 2;
+        int halfScanHeight = (int) (halfBitmapHeight * scanHeightRatio);
+        int startX = halfBitmapWidth - halfScanWidth;
+        int endX = halfBitmapWidth + halfScanWidth;
+        int startY = halfBitmapHeight - halfScanHeight;
+        int endY = halfBitmapHeight + halfScanHeight;
+        if (startX < 0) {
+            startX = 0;
+        }
+        if (endX > bitmapWidth) {
+            endX = bitmapWidth;
+        }
+        if (startY < 0) {
+            startY = 0;
+        }
+        if (endY > bitmapHeight) {
+            endY = bitmapHeight;
+        }
+        int scanWidth = endX - startX;
+        int scanHeight = endY - startY;
+        bitmap = Bitmap.createBitmap(bitmap, startX, startY, scanWidth, scanHeight);
+        scanAsyncTask = new ScanAsyncTask();
+        scanAsyncTask.execute(bitmap);
+
     }
 
     private CheckEm.LayoutStrategy produceDefaultLayoutStrategy() {
@@ -306,6 +346,15 @@ public class MicrScanActivity extends Activity implements TextureView.SurfaceTex
             }
         }
         return optimalSize;
+    }
+
+    private String getFocusMode(List<String> focusModes) {
+        if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+            return Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE;
+        } else if (focusModes.contains(Camera.Parameters.FOCUS_MODE_MACRO)) {
+            return Camera.Parameters.FOCUS_MODE_MACRO;
+        }
+        return null;
     }
 
     class ScanAsyncTask extends AsyncTask<Bitmap, Long, MicrOcrUtil.MicrOcrResult> {
